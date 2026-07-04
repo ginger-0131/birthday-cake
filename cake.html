@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Particle Birthday Cake</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #0b020f;
+            color: #fff;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            overflow: hidden;
+            padding: 40px 20px;
+        }
+        .header {
+            text-align: center;
+            z-index: 10;
+        }
+        .header h1 {
+            font-size: 2.5rem;
+            color: #e076ff;
+            margin-bottom: 10px;
+            text-shadow: 0 0 10px rgba(224, 118, 255, 0.5);
+        }
+        .header p {
+            color: #a59cb0;
+            font-size: 1.1rem;
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .controls {
+            z-index: 10;
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+        .btn {
+            background: linear-gradient(45deg, #ff7b00, #ffae00);
+            border: none;
+            color: white;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(255, 123, 0, 0.4);
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 123, 0, 0.6);
+        }
+        .btn:active {
+            transform: translateY(1px);
+        }
+        .btn.blowing {
+            background: linear-gradient(45deg, #7b00ff, #ae00ff);
+            box-shadow: 0 5px 15px rgba(123, 0, 255, 0.4);
+        }
+        .footer {
+            color: #4a3f54;
+            font-size: 0.85rem;
+            z-index: 10;
+        }
+        /* 提示文字渐入动画 */
+        .status-text {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #00ffcc;
+            min-height: 35px;
+            text-shadow: 0 0 10px rgba(0, 255, 204, 0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>Happy Birthday!</h1>
+        <p>Make a wish and blow into the mic!</p>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="particleCanvas"></canvas>
+    </div>
+
+    <div class="controls">
+        <div class="status-text" id="statusText"></div>
+        <button class="btn" id="blowBtn">
+            <span id="btnIcon">✨</span> <span id="btnText">Click to Blow...</span>
+        </button>
+    </div>
+
+    <div class="footer">
+        Interactive Particle Experience
+    </div>
+
+    <script>
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+        const blowBtn = document.getElementById('blowBtn');
+        const btnText = document.getElementById('btnText');
+        const btnIcon = document.getElementById('btnIcon');
+        const statusText = document.getElementById('statusText');
+
+        let width, height;
+        let particles = [];
+        let isBlowing = false;
+        let blowTimer = 0;
+        let state = 'WAITING'; // WAITING, BLOWING, EXTINGUISHED
+
+        // 粒子类定义
+        class Particle {
+            constructor(targetX, targetY, color, type) {
+                this.targetX = targetX;
+                this.targetY = targetY;
+                // 初始随机散落在画布各处
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.color = color;
+                this.type = type; // 'cake', 'candle', 'flame'
+                this.size = type === 'flame' ? Math.random() * 3 + 2 : Math.random() * 2 + 1;
+                this.vx = 0;
+                this.vy = 0;
+                this.speed = Math.random() * 0.05 + 0.03;
+                this.friction = 0.9;
+                this.baseAlpha = Math.random() * 0.4 + 0.6;
+                this.alpha = this.baseAlpha;
+            }
+
+            update() {
+                if (state === 'WAITING') {
+                    // 缓动回到目标位置（凝聚成蛋糕）
+                    let dx = this.targetX - this.x;
+                    let dy = this.targetY - this.y;
+                    
+                    // 蜡烛火焰轻微摇晃效果
+                    if (this.type === 'flame') {
+                        dx += Math.sin(Date.now() * 0.005 + this.targetY) * 2;
+                        dy += Math.cos(Date.now() * 0.005 + this.targetX) * 1;
+                    }
+
+                    this.vx += dx * this.speed;
+                    this.vy += dy * this.speed;
+                    this.vx *= this.friction;
+                    this.vy *= this.friction;
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    this.alpha = this.baseAlpha;
+
+                } else if (state === 'BLOWING') {
+                    // 受到向上和向外的风力吹散
+                    if (this.type === 'flame' || this.type === 'candle' || Math.random() > 0.3) {
+                        this.vx += (Math.random() - 0.5) * 4;
+                        this.vy -= Math.random() * 4 + 2; // 向上飘散
+                    } else {
+                        // 蛋糕基座粒子受到的影响小一点，向四周震荡
+                        this.vx += (Math.random() - 0.5) * 2;
+                        this.vy += (Math.random() - 0.3) * 1;
+                    }
+                    
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    
+                    // 火焰粒子快速淡出
+                    if (this.type === 'flame') {
+                        this.alpha -= 0.02;
+                    } else {
+                        this.alpha -= 0.005;
+                    }
+                    if (this.alpha < 0) this.alpha = 0;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 初始化画布大小
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            generateCakeParticles();
+        }
+
+        // 数学公式生成3D视觉的蛋糕粒子矩阵
+        function generateCakeParticles() {
+            particles = [];
+            const centerX = width / 2;
+            const centerY = height / 2 + 50;
+
+            // 1. 生成三层蛋糕底座 (利用多层椭圆叠加模拟3D圆柱体)
+            const layers = [
+                { rX: 160, rY: 60, h: 50, count: 800, color: '#f5e6ff', type: 'cake' }, // 底层
+                { rX: 120, rY: 45, h: 45, count: 600, color: '#ffb7e2', type: 'cake' }, // 中层
+                { rX: 80, rY: 30, h: 40, count: 400, color: '#f5e6ff', type: 'cake' }   // 顶层
+            ];
+
+            let currentBaseY = centerY;
+
+            layers.forEach((layer, index) => {
+                // 为每一层生成圆柱体粒子
+                for (let i = 0; i < layer.count; i++) {
+                    // 随机半径和角度来实现实体填充效果
+                    const angle = Math.random() * Math.PI * 2;
+                    const randR = Math.sqrt(Math.random()); // 使得粒子分布更均匀
+                    const curRX = layer.rX * randR;
+                    const curRY = layer.rY * randR;
+                    
+                    const px = centerX + Math.cos(angle) * curRX;
+                    // 在椭圆高度范围内随机分布
+                    const ph = Math.random() * layer.h;
+                    const py = currentBaseY - Math.sin(angle) * curRY - ph;
+
+                    // 边缘部分加亮，增强3D立体感
+                    let color = layer.color;
+                    if (Math.cos(angle) > 0.5) {
+                        color = index % 2 === 0 ? '#e0b3ff' : '#ff85cb'; // 阴影侧
+                    } else if (Math.cos(angle) < -0.5) {
+                        color = '#ffffff'; // 高光侧
+                    }
+
+                    particles.push(new Particle(px, py, color, 'cake'));
+                }
+                // 堆叠下一层的高度
+                currentBaseY -= layer.h - 10;
+            });
+
+            // 2. 在顶层蛋糕上放置3根蜡烛
+            const candlePositions = [
+                { x: centerX - 40, y: currentBaseY - 25 },
+                { x: centerX, y: currentBaseY - 30 },
+                { x: centerX + 40, y: currentBaseY - 25 }
+            ];
+
+            candlePositions.forEach(pos => {
+                // 蜡烛柱体
+                for (let i = 0; i < 40; i++) {
+                    const px = pos.x + (Math.random() - 0.5) * 6;
+                    const py = pos.y - Math.random() * 25;
+                    particles.push(new Particle(px, py, '#ffffff', 'candle'));
+                }
+                // 蜡烛火焰 (黄色/橙色粒子)
+                for (let i = 0; i < 50; i++) {
+                    const px = pos.x + (Math.random() - 0.5) * 8;
+                    // 火焰向上呈现水滴状
+                    const fh = Math.random() * 18;
+                    const py = (pos.y - 25) - fh;
+                    const color = Math.random() > 0.4 ? '#ffcc00' : '#ff3300';
+                    particles.push(new Particle(px, py, color, 'flame'));
+                }
+            });
+        }
+
+        // 动画主循环
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+
+            // 状态逻辑处理
+            if (state === 'BLOWING') {
+                blowTimer++;
+                if (blowTimer > 120) { // 持续约2秒后进入熄灭重置状态
+                    state = 'EXTINGUISHED';
+                    blowBtn.classList.remove('blowing');
+                    btnText.innerText = "Light them again";
+                    btnIcon.innerText = "🔥";
+                    statusText.innerText = "Yay! May your wishes come true! ✨";
+                }
+            }
+
+            // 更新并绘制粒子
+            particles.forEach(p => {
+                p.update();
+                p.draw();
+            });
+
+            requestAnimationFrame(animate);
+        }
+
+        // 按钮点击交互
+        blowBtn.addEventListener('click', () => {
+            if (state === 'WAITING') {
+                state = 'BLOWING';
+                blowTimer = 0;
+                blowBtn.classList.add('blowing');
+                btnText.innerText = "Blowing...";
+                btnIcon.innerText = "💨";
+                statusText.innerText = "";
+            } else if (state === 'EXTINGUISHED') {
+                // 重新初始化回到等待吹灭状态
+                state = 'WAITING';
+                btnText.innerText = "Click to Blow...";
+                btnIcon.innerText = "✨";
+                statusText.innerText = "";
+                generateCakeParticles();
+            }
+        });
+
+        // 初始化
+        window.addEventListener('resize', resize);
+        resize();
+        animate();
+// 启用真实麦克风吹气检测
+function initAudioBlowDetection() {
+    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    .then(stream => {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const analyser = audioContext.createAnalyser();
+        const microphone = audioContext.createMediaStreamSource(stream);
+        const javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+
+        analyser.smoothingTimeConstant = 0.8;
+        analyser.fftSize = 1024;
+
+        microphone.connect(analyser);
+        analyser.connect(javascriptNode);
+        javascriptNode.connect(audioContext.destination);
+
+        javascriptNode.onaudioprocess = function() {
+            const array = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(array);
+            let values = 0;
+
+            const length = array.length;
+            for (let i = 0; i < length; i++) {
+                values += array[i];
+            }
+            // 计算音频平均能量（音量）
+            const average = values / length;
+
+            // 当音量大于设定阈值（比如 45），且当前是等待状态，触发吹气
+            if (average > 45 && state === 'WAITING') {
+                blowBtn.click(); // 自动触发按钮点击
+            }
+        };
+    })
+    .catch(err => {
+        console.log("麦克风权限被拒绝或不支持: ", err);
+    });
+}
+
+// 页面首次点击时激活麦克风（浏览器安全策略要求）
+document.body.addEventListener('click', function initAudio() {
+    initAudioBlowDetection();
+    document.body.removeEventListener('click', initAudio);
+}, { once: true });
+
+    </script>
+</body>
+</html>

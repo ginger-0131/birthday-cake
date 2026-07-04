@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Particle Dream Cake</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #06010a;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            overflow: hidden;
+            padding: 40px 20px;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .header {
+            text-align: center;
+            z-index: 10;
+            pointer-events: none;
+            width: 100%;
+            max-width: 90vw;
+            margin-top: 20px;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: all 0.8s cubic-bezier(0.215, 0.610, 0.355, 1);
+        }
+        .header.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .header h1 {
+            font-size: 1.8rem;
+            font-weight: 300;
+            letter-spacing: 1px;
+            color: #f3adff;
+            margin-bottom: 8px;
+            text-shadow: 0 0 20px rgba(243, 173, 255, 0.6);
+            line-height: 1.3;
+        }
+        .header p {
+            color: #a59cb0;
+            font-size: 0.95rem;
+            letter-spacing: 0.5px;
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .controls {
+            z-index: 10;
+            margin-bottom: 50px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 90px;
+            justify-content: center;
+            width: 100%;
+        }
+        .btn {
+            background: linear-gradient(135deg, #da44ff, #892cdc);
+            border: none;
+            color: white;
+            padding: 14px 45px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            letter-spacing: 1px;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 0 25px rgba(137, 44, 220, 0.5);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            margin-top: 20px;
+        }
+        .btn:active {
+            transform: scale(0.95);
+        }
+        .btn.reset-btn {
+            background: linear-gradient(135deg, #00f2fe, #4facfe);
+            box-shadow: 0 0 25px rgba(79, 172, 254, 0.5);
+        }
+        @media (min-width: 768px) {
+            .header h1 { font-size: 2.4rem; }
+            .header p { font-size: 1.1rem; }
+            .btn { padding: 16px 50px; font-size: 1.1rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header" id="headerBlock">
+        <h1>Cheers to another beautiful year!</h1>
+        <p>Make a wish and blow out the candles. 💨</p>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="particleCanvas"></canvas>
+    </div>
+
+    <div class="controls">
+        <button class="btn" id="wishBtn">✨ Tap Me!</button>
+        <button class="btn reset-btn" id="resetBtn" style="display: none;">🔥 Light Again</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+        const wishBtn = document.getElementById('wishBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const headerBlock = document.getElementById('headerBlock');
+
+        let width, height, scaleFactor;
+        let particles = [];
+        let state = 'WAITING'; 
+        let blowTimer = 0;
+        
+        let angleY = 0; 
+        let isDragging = false;
+        let previousX = 0;
+        let velocityX = 0; 
+
+        const BLOW_THRESHOLD = 75; 
+        const PITCH = 0.42; 
+
+        // 颜色渐变辅助函数 (十六进制转 RGB 进行平滑线性插值)
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : null;
+        }
+
+        function interpolateColor(color1, color2, factor) {
+            const c1 = hexToRgb(color1);
+            const c2 = hexToRgb(color2);
+            const r = Math.round(c1.r + (c2.r - c1.r) * factor);
+            const g = Math.round(c1.g + (c2.g - c1.g) * factor);
+            const b = Math.round(c1.b + (c2.b - c1.b) * factor);
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+
+        class Particle {
+            constructor(localX, localY, localZ, color, type) {
+                this.localX = localX;
+                this.localY = localY;
+                this.localZ = localZ;
+                
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                
+                this.color = color;
+                this.type = type; 
+                
+                const sizeScale = scaleFactor < 1 ? scaleFactor * 1.1 : 1;
+                if (type === 'flame') {
+                    this.baseSize = (Math.random() * 1.3 + 1.2) * sizeScale;
+                } else {
+                    this.baseSize = (Math.random() * 0.8 + 0.45) * sizeScale; 
+                }
+                this.size = this.baseSize;
+
+                this.vx = 0;
+                this.vy = 0;
+                this.speed = Math.random() * 0.04 + 0.02;
+                this.friction = 0.88;
+                this.baseAlpha = Math.random() * 0.35 + 0.55;
+                this.alpha = this.baseAlpha;
+
+                this.smokeVx = (Math.random() - 0.5) * 18; 
+                this.smokeVy = -Math.random() * 6 - 4;     
+                this.flamePhase = Math.random() * 100;
+            }
+
+            update(centerX, centerY) {
+                if (state === 'WAITING' || state === 'LISTENING') {
+                    const cosY = Math.cos(angleY);
+                    const sinY = Math.sin(angleY);
+                    let x1 = this.localX * cosY - this.localZ * sinY;
+                    let z1 = this.localX * sinY + this.localZ * cosY;
+                    let y1 = this.localY;
+
+                    if (this.type === 'flame') {
+                        const t = Date.now() * 0.012 + this.flamePhase;
+                        x1 += Math.sin(t) * Math.cos(t * 0.6) * 1.4 * scaleFactor;
+                        z1 += Math.cos(t * 0.7) * 0.9 * scaleFactor;
+                    }
+
+                    const cosP = Math.cos(PITCH);
+                    const sinP = Math.sin(PITCH);
+                    let rx = x1;
+                    let ry = y1 * cosP - z1 * sinP;
+                    let rz = y1 * sinP + z1 * cosP;
+
+                    const distance = 360 * scaleFactor;
+                    const projection = distance / (distance + rz);
+                    
+                    const targetScreenX = centerX + rx * projection;
+                    const targetScreenY = (centerY - 30 * scaleFactor) + ry * projection;
+
+                    let dx = targetScreenX - this.x;
+                    let dy = targetScreenY - this.y;
+                    
+                    this.vx += dx * this.speed;
+                    this.vy += dy * this.speed;
+                    this.vx *= this.friction;
+                    this.vy *= this.friction;
+                    this.x += this.vx;
+                    this.y += this.vy;
+
+                    this.size = this.baseSize * projection;
+                    
+                    if (this.type === 'flame') {
+                        const flicker = Math.sin(Date.now() * 0.03 + this.flamePhase) * 0.1;
+                        this.alpha = (this.baseAlpha + flicker) * projection;
+                    } else {
+                        this.alpha = this.baseAlpha * projection;
+                    }
+
+                } else if (state === 'BLOWING' || state === 'EXTINGUISHED') {
+                    if (this.type === 'flame') {
+                        this.x += this.smokeVx;
+                        this.y += this.smokeVy;
+                        this.smokeVx *= 0.93; 
+                        this.smokeVy *= 0.93;
+                        this.alpha -= 0.015; 
+                        if (this.alpha < 0) this.alpha = 0;
+                    } else {
+                        const cosY = Math.cos(angleY);
+                        const sinY = Math.sin(angleY);
+                        let x1 = this.localX * cosY - this.localZ * sinY;
+                        let z1 = this.localX * sinY + this.localZ * cosY;
+                        const cosP = Math.cos(PITCH);
+                        const sinP = Math.sin(PITCH);
+                        let rx = x1;
+                        let ry = this.localY * cosP - z1 * sinP;
+                        let rz = this.localY * sinP + z1 * cosP;
+                        
+                        const distance = 360 * scaleFactor;
+                        const projection = distance / (distance + rz);
+                        
+                        let dx = (centerX + rx * projection) - this.x;
+                        let dy = ((centerY - 30 * scaleFactor) + ry * projection) - this.y;
+                        this.vx += dx * this.speed;
+                        this.vy += dy * this.speed;
+                        this.x += this.vx * this.friction;
+                        this.y += this.vy * this.friction;
+                        this.alpha = this.baseAlpha * projection * 0.4; 
+                    }
+                }
+            }
+
+            draw() {
+                if (this.alpha <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            
+            const minDim = Math.min(width, height);
+            scaleFactor = width < 500 ? minDim / 350 : minDim / 550; 
+
+            generateCakeParticles();
+        }
+
+        // 精准表面渲染 + 高清晰度垂直色彩线性渐变算法
+        function generateCakeParticles() {
+            particles = [];
+
+            // 定义每层蛋糕独特的线性渐变色谱（底部颜色 ➡️ 顶部颜色）
+            const layers = [
+                { rX: 125 * scaleFactor, h: 54 * scaleFactor, bottomColor: '#da44ff', topColor: '#ffffff' }, // 底层：炫彩紫到白高光
+                { rX: 92 * scaleFactor,  h: 46 * scaleFactor, bottomColor: '#ff2a85', topColor: '#ffffff' }, // 中层：霓虹粉到白高光
+                { rX: 62 * scaleFactor,  h: 38 * scaleFactor, bottomColor: '#8a2be2', topColor: '#fff0f5' }  // 顶层：梦幻紫到淡粉白
+            ];
+
+            let currentBaseY = 70 * scaleFactor; 
+
+            layers.forEach((layer) => {
+                // 1. 渲染圆柱的“侧表面外壳”
+                const sideCount = Math.floor(layer.rX * 26); 
+                for (let i = 0; i < sideCount; i++) {
+                    const angle = (i / sideCount) * Math.PI * 2;
+                    const lh = Math.random() * layer.h;
+                    
+                    const lx = Math.cos(angle) * layer.rX;
+                    const lz = Math.sin(angle) * layer.rX;
+                    const ly = currentBaseY - lh;
+
+                    // 核心逻辑：计算当前高度比重，进行丝滑的垂直色彩过渡
+                    const colorFactor = lh / layer.h; 
+                    let color = interpolateColor(layer.bottomColor, layer.topColor, colorFactor);
+                    
+                    // 为侧面迎光处引入额外的晶莹高光点缀
+                    if (Math.cos(angle) > 0.65 && Math.random() > 0.5) {
+                        color = '#ffffff';
+                    }
+
+                    particles.push(new Particle(lx, ly, lz, color, 'cake'));
+                }
+
+                // 2. 渲染圆柱顶部的“圆盘盖子表面”
+                const topCount = Math.floor(layer.rX * layer.rX * 0.18);
+                for (let i = 0; i < topCount; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const randR = Math.sqrt(Math.random()); 
+                    const curR = layer.rX * randR;
+
+                    const lx = Math.cos(angle) * curR;
+                    const lz = Math.sin(angle) * curR;
+                    const ly = currentBaseY - layer.h;
+
+                    // 顶面统一使用最亮丽的顶层过渡色
+                    let color = layer.topColor;
+                    if (Math.cos(angle) > 0.6 && Math.random() > 0.4) {
+                        color = '#ffffff';
+                    }
+
+                    particles.push(new Particle(lx, ly, lz, color, 'cake'));
+                }
+
+                currentBaseY -= (layer.h - 4 * scaleFactor);
+            });
+
+            // 3. 【数量调整】顶层等五边形环形围绕的 5 根精致发光蜡烛
+            const candleRadius = 30 * scaleFactor;
+            const candlePositions = [];
+            const candleCount = 5; // 改为5根
+            for (let i = 0; i < candleCount; i++) {
+                const angle = (i * Math.PI * 2) / candleCount; // 72度等分
+                candlePositions.push({
+                    x: Math.cos(angle) * candleRadius,
+                    z: Math.sin(angle) * candleRadius,
+                    y: currentBaseY
+                });
+            }
+
+            candlePositions.forEach(pos => {
+                const candleWidth = 4.0 * scaleFactor;
+                const candleHeight = 25 * scaleFactor;
+                
+                // 蜡烛管壳
+                for (let i = 0; i < 70; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const r = Math.random() * candleWidth;
+                    const lx = pos.x + Math.cos(angle) * r;
+                    const lz = pos.z + Math.sin(angle) * r;
+                    const ly = pos.y - Math.random() * candleHeight;
+                    particles.push(new Particle(lx, ly, lz, '#ffffff', 'candle'));
+                }
+                
+                // 黄金比例水滴短火焰
+                const flameHeight = 14 * scaleFactor; 
+                const maxFlameWidth = 5.5 * scaleFactor;
+                
+                for (let i = 0; i < 150; i++) {
+                    const t = Math.random(); 
+                    const envelope = Math.sin(t * Math.PI) * (1 - t * 0.4);
+                    const currentMaxWidth = maxFlameWidth * envelope;
+                    
+                    const fAngle = Math.random() * Math.PI * 2;
+                    const fR = Math.random() * currentMaxWidth;
+                    
+                    const lx = pos.x + Math.cos(fAngle) * fR;
+                    const lz = pos.z + Math.sin(fAngle) * fR;
+                    const ly = (pos.y - candleHeight) - (t * flameHeight);
+                    
+                    const color = t < 0.65 && Math.random() > 0.3 ? '#ffe600' : '#ff4500';
+                    particles.push(new Particle(lx, ly, lz, color, 'flame'));
+                }
+            });
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#06010a';
+            ctx.fillRect(0, 0, width, height);
+            
+            ctx.globalCompositeOperation = 'screen';
+
+            if (!isDragging) {
+                angleY += velocityX;
+                velocityX *= 0.95; 
+                if (Math.abs(velocityX) < 0.005) {
+                    velocityX = 0.006; // 优雅低速自转
+                }
+            }
+
+            if (state === 'BLOWING') {
+                blowTimer++;
+                if (blowTimer > 90) { 
+                    state = 'EXTINGUISHED';
+                    resetBtn.style.display = 'block';   
+                }
+            }
+
+            const centerX = width / 2;
+            const centerY = height * 0.55; 
+
+            particles.forEach(p => {
+                p.update(centerX, centerY);
+                p.draw();
+            });
+
+            ctx.globalCompositeOperation = 'source-over';
+            requestAnimationFrame(animate);
+        }
+
+        function handleStart(clientX) {
+            isDragging = true;
+            previousX = clientX;
+            velocityX = 0;
+        }
+
+        function handleMove(clientX) {
+            if (!isDragging) return;
+            const deltaX = clientX - previousX;
+            previousX = clientX;
+            angleY += deltaX * 0.008; 
+            velocityX = deltaX * 0.008; 
+        }
+
+        function handleEnd() {
+            isDragging = false;
+        }
+
+        window.addEventListener('mousedown', (e) => {
+            if(e.target.tagName === 'BUTTON') return; 
+            handleStart(e.clientX);
+        });
+        window.addEventListener('mousemove', (e) => handleMove(e.clientX));
+        window.addEventListener('mouseup', handleEnd);
+
+        window.addEventListener('touchstart', (e) => {
+            if(e.target.tagName === 'BUTTON') return;
+            handleStart(e.touches[0].clientX);
+        });
+        window.addEventListener('touchmove', (e) => {
+            handleMove(e.touches[0].clientX);
+        });
+        window.addEventListener('touchend', handleEnd);
+
+        function startAudioListening() {
+            navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+            .then(stream => {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const analyser = audioContext.createAnalyser();
+                const microphone = audioContext.createMediaStreamSource(stream);
+                const javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+
+                analyser.smoothingTimeConstant = 0.4; 
+                analyser.fftSize = 512;
+
+                microphone.connect(analyser);
+                analyser.connect(javascriptNode);
+                javascriptNode.connect(audioContext.destination);
+
+                javascriptNode.onaudioprocess = function() {
+                    if (state !== 'LISTENING') return;
+                    
+                    const array = new Uint8Array(analyser.frequencyBinCount);
+                    analyser.getByteFrequencyData(array);
+                    let values = 0;
+                    for (let i = 0; i < array.length; i++) {
+                        values += array[i];
+                    }
+                    const average = values / array.length;
+
+                    if (average > BLOW_THRESHOLD) {
+                        state = 'BLOWING';
+                        blowTimer = 0;
+                        stream.getTracks().forEach(track => track.stop());
+                    }
+                };
+            })
+            .catch(err => {
+                console.warn("麦克风不可用:", err);
+            });
+        }
+
+        wishBtn.addEventListener('click', () => {
+            wishBtn.style.display = 'none';
+            headerBlock.classList.add('show'); 
+            state = 'LISTENING';
+            startAudioListening();
+        });
+
+        resetBtn.addEventListener('click', () => {
+            resetBtn.style.display = 'none';
+            headerBlock.classList.remove('show'); 
+            wishBtn.style.display = 'block';
+            state = 'WAITING';
+            generateCakeParticles(); 
+        });
+
+        window.addEventListener('resize', resize);
+        resize();
+        animate();
+    </script>
+</body>
+</html>
