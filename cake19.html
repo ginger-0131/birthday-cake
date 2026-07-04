@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Particle Dream Cake</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #050108;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            overflow: hidden;
+            padding: 30px 15px;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .header {
+            text-align: center;
+            z-index: 10;
+            pointer-events: none;
+            width: 100%;
+            max-width: 90vw;
+            margin-top: 25px;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: all 0.8s cubic-bezier(0.215, 0.610, 0.355, 1);
+        }
+        .header.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 300;
+            letter-spacing: 1px;
+            color: #f2e3ff;
+            margin-bottom: 8px;
+            text-shadow: 0 0 20px rgba(242, 227, 255, 0.4);
+            line-height: 1.3;
+        }
+        .header p {
+            color: #a39bb0;
+            font-size: 0.9rem;
+            letter-spacing: 0.5px;
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .controls {
+            z-index: 10;
+            margin-bottom: 85px; 
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 80px;
+            justify-content: center;
+            width: 100%;
+        }
+        .btn {
+            background: transparent;
+            border: 2px dashed rgba(220, 180, 255, 0.45); 
+            color: #f2e3ff;
+            padding: 13px 45px;
+            font-size: 0.95rem;
+            font-weight: 400;
+            letter-spacing: 2px;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 0 15px rgba(150, 110, 230, 0.08);
+            margin-top: 20px;
+            backdrop-filter: blur(5px);
+            opacity: 0; 
+            pointer-events: none; 
+            transition: opacity 0.8s ease, border-color 0.4s ease, box-shadow 0.4s ease, transform 0.2s ease;
+        }
+        .btn.ready-to-tap {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .btn:hover {
+            border-color: rgba(220, 180, 255, 0.9);
+            box-shadow: 0 0 25px rgba(150, 110, 230, 0.25);
+            background: rgba(220, 180, 255, 0.05);
+        }
+        .btn:active {
+            transform: scale(0.96);
+        }
+        .btn.reset-btn {
+            border-color: rgba(140, 220, 250, 0.5);
+            color: #d2f0ff;
+            box-shadow: 0 0 15px rgba(79, 172, 254, 0.1);
+        }
+        .btn.reset-btn:hover {
+            border-color: rgba(140, 220, 250, 0.9);
+            background: rgba(79, 172, 254, 0.05);
+        }
+        @media (min-width: 768px) {
+            .header h1 { font-size: 2.2rem; }
+            .btn { padding: 15px 50px; font-size: 1.05rem; }
+            .controls { margin-bottom: 110px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header" id="headerBlock">
+        <h1>Cheers to another beautiful year!</h1>
+        <p>Make a wish and blow out the candles. 💨</p>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="particleCanvas"></canvas>
+    </div>
+
+    <div class="controls">
+        <button class="btn" id="wishBtn">✨ Tap Me</button>
+        <button class="btn reset-btn" id="resetBtn" style="display: none;">🔥 Light Again</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+        const wishBtn = document.getElementById('wishBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const headerBlock = document.getElementById('headerBlock');
+
+        let width, height, scaleFactor;
+        let particles = [];
+        let state = 'WAITING'; 
+        let blowTimer = 0;
+        let spawnTicks = 0; 
+        
+        let angleY = 0; 
+        let isDragging = false;
+        let previousX = 0;
+        let velocityX = 0; 
+
+        const BLOW_THRESHOLD = 75; 
+        // 【视角精调】1. 调小俯视视角，趋向于更挺拔的微平视
+        const PITCH = 0.11; 
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : null;
+        }
+        function interpolateColor(c1, c2, factor) {
+            return `rgb(${Math.round(c1.r + (c2.r - c1.r) * factor)}, ${Math.round(c1.g + (c2.g - c1.g) * factor)}, ${Math.round(c1.b + (c2.b - c1.b) * factor)})`;
+        }
+
+        const palette = {
+            text1: hexToRgb('#f5e6ff'), text2: hexToRgb('#ffd6e8'),
+            cakeB: hexToRgb('#a0c4ff'), cakeT: hexToRgb('#ffb6c1'), 
+            candle1: hexToRgb('#ffe8a3'), candle2: hexToRgb('#e6b042'),
+            fireCore: hexToRgb('#ff1a1a'), fireMid: hexToRgb('#ff9900'), fireOut: hexToRgb('#ffea00')
+        };
+
+        class Particle {
+            constructor(localX, localY, localZ, color, type, flameHeightRatio = 0, isCore = false) {
+                this.localX = localX;
+                this.localY = localY;
+                this.localZ = localZ;
+                
+                const spawnRadius = Math.max(window.innerWidth, window.innerHeight) * 1.2;
+                const spawnAngle = Math.random() * Math.PI * 2;
+                this.x = window.innerWidth / 2 + Math.cos(spawnAngle) * spawnRadius * (Math.random() * 0.2 + 0.8);
+                this.y = window.innerHeight / 2 + Math.sin(spawnAngle) * spawnRadius * (Math.random() * 0.2 + 0.8);
+                
+                this.color = color;
+                this.type = type; 
+                this.flameHeightRatio = flameHeightRatio; 
+                this.isCore = isCore;
+                
+                const sizeScale = scaleFactor < 1 ? scaleFactor * 1.1 : 1;
+                if (type === 'flame') {
+                    this.baseSize = (Math.random() * 1.2 + 1.0) * sizeScale;
+                } else if (type === 'text') {
+                    this.baseSize = (Math.random() * 0.5 + 0.6) * sizeScale; 
+                } else {
+                    this.baseSize = (Math.random() * 0.7 + 0.4) * sizeScale; 
+                }
+                this.size = this.baseSize;
+
+                this.vx = 0;
+                this.vy = 0;
+                this.baseSpeed = Math.random() * 0.05 + 0.07; 
+                this.friction = 0.78; 
+                
+                this.baseAlpha = type === 'text' ? (Math.random() * 0.15 + 0.8) : (Math.random() * 0.3 + 0.6);
+                this.alpha = this.baseAlpha;
+
+                const explodeAngle = Math.random() * Math.PI * 2;
+                const explodeSpeed = Math.random() * 12 + 6; 
+                this.smokeVx = Math.cos(explodeAngle) * explodeSpeed;
+                this.smokeVy = Math.sin(explodeAngle) * explodeSpeed - Math.random() * 4; 
+                this.flamePhase = Math.random() * 100;
+            }
+
+            update(centerX, centerY) {
+                let targetScreenX, targetScreenY, projection = 1;
+
+                if (this.type === 'text') {
+                    targetScreenX = centerX + this.localX;
+                    targetScreenY = centerY + this.localY;
+                    this.size = this.baseSize;
+                    
+                    if (state !== 'WAITING') {
+                        this.alpha -= 0.05; 
+                    } else {
+                        this.alpha = this.baseAlpha;
+                    }
+                } else {
+                    let x1 = this.localX;
+                    let z1 = this.localZ;
+                    let y1 = this.localY;
+
+                    if (this.type === 'flame') {
+                        const time = Date.now() * 0.007 + this.flamePhase;
+                        const swing = Math.sin(time + this.flameHeightRatio * 3.0) * 2.2 * this.flameHeightRatio * scaleFactor;
+                        x1 += swing;
+                        z1 += Math.cos(time * 0.8 + this.flameHeightRatio * 2.0) * 1.0 * this.flameHeightRatio * scaleFactor;
+                    }
+
+                    const cosY = Math.cos(angleY);
+                    const sinY = Math.sin(angleY);
+                    let rx1 = x1 * cosY - z1 * sinY;
+                    let rz1 = x1 * sinY + z1 * cosY;
+
+                    const cosP = Math.cos(PITCH);
+                    const sinP = Math.sin(PITCH);
+                    let rx = rx1;
+                    let ry = y1 * cosP - rz1 * sinP;
+                    let rz = y1 * sinP + rz1 * cosP;
+
+                    // 【视角精调】2. 减小相机距离值，让镜头直接推进怼近蛋糕，使视觉体积变大
+                    const distance = 290 * scaleFactor; 
+                    projection = distance / (distance + rz);
+                    
+                    targetScreenX = centerX + rx * projection;
+                    targetScreenY = centerY + ry * projection;
+                }
+
+                if (state === 'WAITING' || state === 'LISTENING') {
+                    let dx = targetScreenX - this.x;
+                    let dy = targetScreenY - this.y;
+                    
+                    let currentSpeed = spawnTicks < 60 ? this.baseSpeed * 2.5 : this.baseSpeed * 0.55;
+
+                    this.vx += dx * currentSpeed;
+                    this.vy += dy * currentSpeed;
+                    this.vx *= this.friction;
+                    this.vy *= this.friction;
+                    this.x += this.vx;
+                    this.y += this.vy;
+
+                    if (this.type !== 'text') {
+                        this.size = this.baseSize * projection;
+                        if (this.type === 'flame') {
+                            const flicker = Math.sin(Date.now() * 0.06 + this.flamePhase) * 0.06;
+                            let borderFade = 1.0 - (this.flameHeightRatio * 0.22);
+                            this.alpha = (this.baseAlpha + flicker) * projection * borderFade;
+                        } else {
+                            this.alpha = this.baseAlpha * projection;
+                        }
+                    }
+                } else {
+                    if (this.type === 'flame') {
+                        this.x += this.smokeVx;
+                        this.y += this.smokeVy;
+                        this.smokeVx *= 0.94; 
+                        this.smokeVy *= 0.94;
+                        this.size = this.baseSize * projection * 0.45; 
+                        this.alpha -= 0.016; 
+                    } else if (this.type === 'text') {
+                        this.alpha -= 0.05; 
+                    } else {
+                        let dx = targetScreenX - this.x;
+                        let dy = targetScreenY - this.y;
+                        this.vx += dx * this.baseSpeed;
+                        this.vy += dy * this.baseSpeed;
+                        this.x += this.vx * this.friction;
+                        this.y += this.vy * this.friction;
+                        this.alpha = this.baseAlpha * projection * 0.35;
+                    }
+                }
+                if (this.alpha < 0) this.alpha = 0;
+            }
+
+            draw() {
+                if (this.alpha <= 0) return;
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = this.alpha;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            
+            const minDim = Math.min(width, height);
+            scaleFactor = width < 500 ? minDim / 360 : minDim / 520; 
+
+            generateCakeParticles();
+        }
+
+        function fetchTextPointsSingle(text, fontSize) {
+            const memCanvas = document.createElement('canvas');
+            const memCtx = memCanvas.getContext('2d');
+            memCanvas.width = 550;
+            memCanvas.height = 80;
+            
+            memCtx.fillStyle = '#000';
+            memCtx.fillRect(0, 0, memCanvas.width, memCanvas.height);
+            memCtx.fillStyle = '#fff';
+            memCtx.font = `bold ${fontSize}px -apple-system,BlinkMacSystemFont,sans-serif`;
+            memCtx.textAlign = 'center';
+            memCtx.textBaseline = 'middle';
+            memCtx.fillText(text, memCanvas.width / 2, memCanvas.height / 2);
+            
+            const imgData = memCtx.getImageData(0, 0, memCanvas.width, memCanvas.height);
+            const points = [];
+            const step = window.innerWidth < 500 ? 3 : 2; 
+            
+            for (let y = 0; y < memCanvas.height; y += step) {
+                for (let x = 0; x < memCanvas.width; x += step) {
+                    if (imgData.data[(y * memCanvas.width + x) * 4] > 128) {
+                        points.push({ lx: x - memCanvas.width / 2, ly: y - memCanvas.height / 2 });
+                    }
+                }
+            }
+            return points;
+        }
+
+        function generateCakeParticles() {
+            particles = [];
+            spawnTicks = 0; 
+            wishBtn.classList.remove('ready-to-tap'); 
+
+            const textFontSize = Math.floor(48 * scaleFactor);
+            const happyPoints = fetchTextPointsSingle("HAPPY", textFontSize);
+            const birthdayPoints = fetchTextPointsSingle("BIRTHDAY", textFontSize);
+            
+            happyPoints.forEach(pt => {
+                const lx = pt.lx * 0.48 * scaleFactor;
+                // 伴随平视，将文字相对高度微调，保证层次优美
+                const ly = -195 * scaleFactor + pt.ly * 0.48 * scaleFactor; 
+                const color = interpolateColor(palette.text1, palette.text2, Math.random());
+                particles.push(new Particle(lx, ly, 0, color, 'text'));
+            });
+            birthdayPoints.forEach(pt => {
+                const lx = pt.lx * 0.48 * scaleFactor;
+                const ly = -150 * scaleFactor + pt.ly * 0.48 * scaleFactor; 
+                const color = interpolateColor(palette.text1, palette.text2, Math.random());
+                particles.push(new Particle(lx, ly, 0, color, 'text'));
+            });
+
+            const layers = [
+                { rX: 125 * scaleFactor, h: 46 * scaleFactor }, 
+                { rX: 95 * scaleFactor,  h: 42 * scaleFactor }, 
+                { rX: 65 * scaleFactor,  h: 38 * scaleFactor }  
+            ];
+
+            // 稍微把整体视觉中心下沉，避免拉近镜头后蜡烛出界
+            let currentBaseY = 110 * scaleFactor; 
+
+            layers.forEach((layer) => {
+                const sideCount = Math.floor(layer.rX * 22); 
+                for (let i = 0; i < sideCount; i++) {
+                    const angle = (i / sideCount) * Math.PI * 2;
+                    const lh = Math.random() * layer.h;
+                    const lx = Math.cos(angle) * layer.rX;
+                    const lz = Math.sin(angle) * layer.rX;
+                    const ly = currentBaseY - lh;
+
+                    const colorFactor = lh / layer.h;
+                    let color = interpolateColor(palette.cakeB, palette.cakeT, colorFactor);
+                    if (Math.cos(angle) > 0.75 && Math.random() > 0.85) color = '#ffffff';
+
+                    particles.push(new Particle(lx, ly, lz, color, 'cake'));
+                }
+
+                const topCount = Math.floor(layer.rX * layer.rX * 0.15);
+                for (let i = 0; i < topCount; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const randR = Math.sqrt(Math.random()); 
+                    const curR = layer.rX * randR;
+                    const lx = Math.cos(angle) * curR;
+                    const lz = Math.sin(angle) * curR;
+                    const ly = currentBaseY - layer.h;
+
+                    let color = interpolateColor(palette.cakeB, palette.cakeT, 0.75);
+                    if (Math.cos(angle) > 0.65 && Math.random() > 0.75) color = '#ffffff';
+
+                    particles.push(new Particle(lx, ly, lz, color, 'cake'));
+                }
+                currentBaseY -= (layer.h - 4 * scaleFactor);
+            });
+
+            const candleRadius = 38 * scaleFactor; 
+            const candlePositions = [];
+            const candleCount = 6; 
+            for (let i = 0; i < candleCount; i++) {
+                const angle = (i * Math.PI * 2) / candleCount; 
+                candlePositions.push({ x: Math.cos(angle) * candleRadius, z: Math.sin(angle) * candleRadius, y: currentBaseY });
+            }
+
+            candlePositions.forEach(pos => {
+                const candleWidth = 3.0 * scaleFactor; 
+                const candleHeight = 35 * scaleFactor; 
+                
+                const cSideCount = 24; 
+                const cHeightLayers = 14; 
+                for (let h = 0; h < cHeightLayers; h++) {
+                    const ly = pos.y - (h / cHeightLayers) * candleHeight;
+                    for (let s = 0; s < cSideCount; s++) {
+                        const cAngle = (s / cSideCount) * Math.PI * 2;
+                        const factor = (Math.cos(cAngle) + 1) / 2;
+                        const color = interpolateColor(palette.candle2, palette.candle1, factor);
+                        particles.push(new Particle(pos.x + Math.cos(cAngle) * candleWidth, ly, pos.z + Math.sin(cAngle) * candleWidth, color, 'candle'));
+                    }
+                }
+                
+                const flameHeight = 16 * scaleFactor; 
+                const maxFlameWidth = 10.5 * scaleFactor; 
+                const flameParticlesCount = 320; 
+                
+                for (let i = 0; i < flameParticlesCount; i++) {
+                    const t = Math.random(); 
+                    const envelope = Math.sin(t * Math.PI * 0.95) * (1 - t * 0.7);
+                    const fAngle = Math.random() * Math.PI * 2;
+                    
+                    const randR = Math.pow(Math.random(), 1.2); 
+                    const currentRadius = maxFlameWidth * envelope * randR;
+                    
+                    const lx = pos.x + Math.cos(fAngle) * currentRadius;
+                    const lz = pos.z + Math.sin(fAngle) * currentRadius;
+                    const ly = (pos.y - candleHeight) - (t * flameHeight);
+                    
+                    let color;
+                    if (randR < 0.35 && t < 0.4) {
+                        color = interpolateColor(palette.fireCore, palette.fireMid, randR / 0.35); 
+                    } else if (randR < 0.7) {
+                        color = interpolateColor(palette.fireMid, palette.fireOut, (randR - 0.35) / 0.35);
+                    } else {
+                        color = interpolateColor(palette.fireOut, palette.fireMid, (randR - 0.7) / 0.3); 
+                    }
+                    
+                    particles.push(new Particle(lx, ly, lz, color, 'flame', t, (randR < 0.35)));
+                }
+            });
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#050108';
+            ctx.fillRect(0, 0, width, height);
+            
+            ctx.globalCompositeOperation = 'screen';
+            spawnTicks++; 
+
+            if (!isDragging) {
+                if (spawnTicks > 180) { 
+                    angleY += velocityX;
+                    velocityX *= 0.95; 
+                    if (Math.abs(velocityX) < 0.005) {
+                        velocityX = 0.005; 
+                    }
+                } else {
+                    angleY = 0;
+                    velocityX = 0;
+                }
+            }
+
+            if (spawnTicks === 180 && state === 'WAITING') {
+                wishBtn.classList.add('ready-to-tap');
+            }
+
+            if (state === 'BLOWING') {
+                blowTimer++;
+                if (blowTimer > 75) { 
+                    state = 'EXTINGUISHED';
+                    resetBtn.style.display = 'block';   
+                    setTimeout(() => resetBtn.classList.add('ready-to-tap'), 30);
+                }
+            }
+
+            const centerX = width / 2;
+            // 协同拉近镜头后的画面居中
+            const centerY = height * 0.46; 
+
+            for (let i = 0; i < particles.length; i++) {
+                particles[i].update(centerX, centerY);
+                particles[i].draw();
+            }
+
+            ctx.globalCompositeOperation = 'source-over';
+            requestAnimationFrame(animate);
+        }
+
+        function handleStart(clientX) {
+            if (spawnTicks < 180) return; 
+            isDragging = true;
+            previousX = clientX;
+            velocityX = 0;
+        }
+        function handleMove(clientX) {
+            if (!isDragging) return;
+            const deltaX = clientX - previousX;
+            previousX = clientX;
+            angleY += deltaX * 0.007; 
+            velocityX = deltaX * 0.007; 
+        }
+        function handleEnd() { isDragging = false; }
+
+        window.addEventListener('mousedown', (e) => { if(e.target.tagName === 'BUTTON') return; handleStart(e.clientX); });
+        window.addEventListener('mousemove', (e) => handleMove(e.clientX));
+        window.addEventListener('mouseup', handleEnd);
+        window.addEventListener('touchstart', (e) => { if(e.target.tagName === 'BUTTON') return; handleStart(e.touches[0].clientX); });
+        window.addEventListener('touchmove', (e) => handleMove(e.touches[0].clientX));
+        window.addEventListener('touchend', handleEnd);
+
+        function startAudioListening() {
+            navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+            .then(stream => {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const analyser = audioContext.createAnalyser();
+                const microphone = audioContext.createMediaStreamSource(stream);
+                const javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+
+                analyser.smoothingTimeConstant = 0.4; 
+                analyser.fftSize = 512;
+                microphone.connect(analyser);
+                analyser.connect(javascriptNode);
+                javascriptNode.connect(audioContext.destination);
+
+                javascriptNode.onaudioprocess = function() {
+                    if (state !== 'LISTENING') return;
+                    const array = new Uint8Array(analyser.frequencyBinCount);
+                    analyser.getByteFrequencyData(array);
+                    let values = 0;
+                    for (let i = 0; i < array.length; i++) values += array[i];
+                    const average = values / array.length;
+
+                    if (average > BLOW_THRESHOLD) {
+                        state = 'BLOWING';
+                        blowTimer = 0;
+                        stream.getTracks().forEach(track => track.stop());
+                    }
+                };
+            })
+            .catch(err => { console.warn("麦克风未授权或不可用", err); });
+        }
+
+        wishBtn.addEventListener('click', () => {
+            wishBtn.classList.remove('ready-to-tap');
+            setTimeout(() => { wishBtn.style.display = 'none'; }, 300);
+            headerBlock.classList.add('show'); 
+            state = 'LISTENING'; 
+            startAudioListening();
+        });
+
+        resetBtn.addEventListener('click', () => {
+            resetBtn.style.display = 'none';
+            resetBtn.classList.remove('ready-to-tap');
+            headerBlock.classList.remove('show'); 
+            wishBtn.style.display = 'block';
+            state = 'WAITING';
+            generateCakeParticles(); 
+        });
+
+        window.addEventListener('resize', resize);
+        resize();
+        animate();
+    </script>
+</body>
+</html>
